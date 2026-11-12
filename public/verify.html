@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>Verified deliveries · ProofPay</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2314213D'/%3E%3Cpath d='M9 17l5 5 9-12' stroke='%2335C08A' stroke-width='3.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+  <style>
+    .vwrap { max-width: 860px; margin: 0 auto; padding: 34px 16px 80px; }
+    .vhead { display: flex; align-items: center; gap: 10px; margin-bottom: 26px; }
+    .vhero { display: grid; grid-template-columns: auto 1fr; gap: 20px; align-items: center; margin-bottom: 22px; }
+    .vcount { font-size: clamp(56px, 10vw, 88px); font-weight: 800; letter-spacing: -0.05em; line-height: .9; }
+    .vhero h1 { font-size: clamp(24px, 3.4vw, 32px); }
+    .vhero p { color: var(--ink-2); margin-top: 6px; }
+    .stats { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 2px solid var(--ink); margin-bottom: 22px; }
+    .stats div { padding: 12px 14px 0 0; }
+    .stats b { display: block; font-size: 22px; letter-spacing: -0.02em; }
+    .stats span { font-size: 13px; color: var(--ink-3); }
+    .who { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    .who input { max-width: 300px; }
+    .who-result { font-weight: 600; font-size: 14px; }
+    .ok { color: var(--green); } .bad { color: var(--red); }
+    .att { background: var(--sheet); border: 1px solid var(--rule); border-radius: 14px; padding: 16px 18px; margin-bottom: 12px; }
+    .att-top { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+    .att h3 { font-size: 16px; }
+    .att .amt { font-weight: 800; font-size: 18px; white-space: nowrap; }
+    .att ul { list-style: none; padding: 0; margin: 10px 0 0; display: grid; gap: 4px; font-size: 13.5px; color: var(--ink-2); }
+    .att li { display: grid; grid-template-columns: 18px 1fr; gap: 6px; }
+    .att .meta { font-size: 13px; color: var(--ink-3); margin-top: 8px; overflow-wrap: anywhere; }
+    .chip-ok { background: var(--green-soft); color: var(--green); }
+    .chip-warn { background: var(--amber-soft); color: var(--amber); }
+    .chip-bad { background: var(--red-soft); color: var(--red); }
+    details { margin-top: 26px; }
+    summary { cursor: pointer; font-weight: 600; }
+    @media (max-width: 640px) { .stats { grid-template-columns: 1fr 1fr; } .vhero { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main class="vwrap">
+    <a class="brand vhead" href="/">
+      <svg viewBox="0 0 32 32" aria-hidden="true" style="width:28px;height:28px"><rect width="32" height="32" rx="8" class="brand-tile"/><path d="M9 17l5 5 9-12" class="brand-tick"/></svg>
+      <span>ProofPay</span>
+    </a>
+    <div id="out"><p class="muted">Checking signatures…</p></div>
+
+    <section class="panel stack" id="paste" hidden>
+      <div><h2>Check a proof of delivery</h2>
+      <p class="muted small" style="margin-top:4px">Paste a ProofPay attestation (it starts with <code>eyJ</code>) or a track record link.</p></div>
+      <textarea id="paste-in" rows="5" aria-label="Attestation or link"></textarea>
+      <div class="row-end" style="justify-content:flex-start"><button class="btn btn-primary" id="paste-go">Check it</button></div>
+    </section>
+
+    <details>
+      <summary>How to check this yourself, without ProofPay</summary>
+      <div class="stack" style="margin-top:12px">
+        <p class="muted small">Each delivery is a standard JWS (RFC 7515) signed with Ed25519. The public key is published at
+          <a href="/.well-known/jwks.json"><code>/.well-known/jwks.json</code></a>. Any JOSE library can verify it, for example in Node:</p>
+<pre><code>import { createRemoteJWKSet, jwtVerify } from "jose";
+const keys = createRemoteJWKSet(new URL("https://&lt;issuer&gt;/.well-known/jwks.json"));
+const { payload } = await jwtVerify(token, keys);   // throws if altered</code></pre>
+        <p class="muted small">To confirm whose record this is, ask for their email and compare
+          <code>sha256("proofpay:subject:" + email.toLowerCase())</code> with the <code>freelancer</code> field — the box above does that for you.
+          Live status (a PayPal dispute or refund after release) is at <code>/api/attestations/&lt;id&gt;/status</code>.</p>
+      </div>
+    </details>
+  </main>
+
+<script type="module">
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const b64u = (s) => Uint8Array.from(atob(s.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(s.length / 4) * 4, "=")), (c) => c.charCodeAt(0));
+const text = (u8) => new TextDecoder().decode(u8);
+const money = (n, c) => `${c === "USD" ? "$" : c === "EUR" ? "€" : c === "GBP" ? "£" : c + " "}${Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const SALT = "proofpay:subject:";
+const hashEmail = async (email) => "sha256:" + [...new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(SALT + email.trim().toLowerCase())))].map((b) => b.toString(16).padStart(2, "0")).join("");
+const CTYPE = { github_pr_merged: "PR merged", github_checks_passed: "CI green", url_live: "Live URL", url_contains: "Page content", ai_judgment: "AI review" };
+
+function tokensFromHash() {
+  const h = new URLSearchParams(location.hash.slice(1));
+  if (h.get("t")) return [h.get("t")];
+  if (h.get("b")) return h.get("b").split("~").filter(Boolean);
+  return [];
+}
+
+function parse(token) {
+  const [h, p, s] = token.split(".");
+  return { token, header: JSON.parse(text(b64u(h))), payload: JSON.parse(text(b64u(p))), signed: new TextEncoder().encode(`${h}.${p}`), sig: b64u(s) };
+}
+
+async function checkInBrowser(items) {
+  // Ed25519 in WebCrypto: current Chrome, Edge, Firefox and Safari. Older browsers fall back to the issuer's API.
+  const jwks = await fetch("/.well-known/jwks.json").then((r) => r.json());
+  const results = [];
+  for (const it of items) {
+    const jwk = jwks.keys.find((k) => k.kid === it.header.kid);
+    if (!jwk) { results.push({ valid: false, reason: "Signed with a key this issuer doesn't publish" }); continue; }
+    const key = await crypto.subtle.importKey("jwk", { kty: jwk.kty, crv: jwk.crv, x: jwk.x }, { name: "Ed25519" }, false, ["verify"]);
+    const valid = await crypto.subtle.verify({ name: "Ed25519" }, key, it.sig, it.signed);
+    results.push(valid ? { valid: true } : { valid: false, reason: "Signature doesn't match — altered or not from this issuer" });
+  }
+  return results;
+}
+
+async function run(tokens) {
+  if (!tokens.length) { $("#out").innerHTML = ""; $("#paste").hidden = false; return; }
+  let items;
+  try { items = tokens.map(parse); }
+  catch { $("#out").innerHTML = `<div class="warn">That doesn't look like a ProofPay attestation.</div>`; $("#paste").hidden = false; return; }
+
+  let sigs, method = "in your browser, using the issuer's published public key";
+  try { sigs = await checkInBrowser(items); }
+  catch { sigs = null; }
+  let server = null;
+  try { server = await fetch("/api/attestations/verify-bundle", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ tokens }) }).then((r) => r.json()); }
+  catch { /* offline: signatures still count */ }
+  if (!sigs) { sigs = server ? server.map((r) => ({ valid: r.valid, reason: r.reason })) : items.map(() => ({ valid: false, reason: "Couldn't check" })); method = "by the issuer's API (your browser doesn't support Ed25519 yet)"; }
+
+  const rows = items.map((it, i) => ({ ...it, valid: sigs[i].valid, reason: sigs[i].reason, status: server?.[i]?.status ?? "unknown" }));
+  const good = rows.filter((r) => r.valid);
+  const counted = good.filter((r) => r.status !== "revoked");
+  const p0 = good[0]?.payload;
+  const byCur = {};
+  for (const r of counted) byCur[r.payload.work.currency] = (byCur[r.payload.work.currency] || 0) + r.payload.work.amount;
+  const clients = new Set(counted.map((r) => r.payload.client)).size;
+  const timed = counted.filter((r) => r.payload.timeline.onTime !== null);
+  const onTime = timed.length ? Math.round((timed.filter((r) => r.payload.timeline.onTime).length / timed.length) * 100) : null;
+  const crit = counted.flatMap((r) => r.payload.work.criteria);
+  const subjects = new Set(good.map((r) => r.payload.freelancer));
+  const issuer = p0 ? new URL(p0.iss).host : location.host;
+  const dates = counted.map((r) => r.payload.timeline.releasedAt).filter(Boolean).sort();
+
+  $("#out").innerHTML = `
+    <section class="vhero">
+      <div class="vcount">${counted.length}</div>
+      <div>
+        <h1>${counted.length === 1 ? "verified delivery" : "verified deliveries"}${subjects.size === 1 ? "" : " (several people)"}</h1>
+        <p>Each one was checked against agreed criteria before PayPal released the money. Signatures were checked ${method}.
+        ${rows.length - good.length ? `<b class="bad">${rows.length - good.length} failed the signature check and aren't counted.</b>` : ""}</p>
+      </div>
+    </section>
+    ${counted.length ? `<div class="stats">
+      <div><b>${Object.entries(byCur).map(([c, v]) => money(v, c)).join(" + ") || "–"}</b><span>paid after verification</span></div>
+      <div><b>${clients}</b><span>${clients === 1 ? "client" : "different clients"}</span></div>
+      <div><b>${onTime === null ? "–" : onTime + "%"}</b><span>delivered on time</span></div>
+      <div><b>${crit.filter((c) => c.passed).length}/${crit.length}</b><span>criteria passed</span></div>
+    </div>` : ""}
+    ${subjects.size === 1 ? `<section class="panel" style="margin-bottom:18px">
+      <div class="who"><label for="who" style="margin:0">Is this the person you're talking to?</label>
+      <input id="who" type="email" placeholder="their email" autocomplete="off"><button class="btn" id="who-go">Check</button><span class="who-result" id="who-out" aria-live="polite"></span></div>
+      <p class="muted small" style="margin-top:8px">The record doesn't contain their email. We hash what you type here, in your browser, and compare.</p>
+    </section>` : ""}
+    <p class="muted small" style="margin-bottom:10px">Issued by <b>${esc(issuer)}</b>${dates.length ? ` · ${esc(dates[0].slice(0, 10))} to ${esc(dates.at(-1).slice(0, 10))}` : ""}</p>
+    ${rows.map((r) => {
+      const w = r.payload.work;
+      const chip = !r.valid ? `<span class="pill chip-bad">Signature invalid</span>`
+        : r.status === "valid" ? `<span class="pill chip-ok">Verified</span>`
+        : r.status === "disputed" ? `<span class="pill chip-warn">PayPal dispute open</span>`
+        : r.status === "revoked" ? `<span class="pill chip-bad">Refunded after release</span>` : `<span class="pill chip-ok">Signature valid</span>`;
+      return `<article class="att">
+        <div class="att-top"><div><h3>${esc(w.title)}</h3><div class="muted small">${esc(w.project)}</div></div><div class="amt">${money(w.amount, w.currency)}</div></div>
+        ${chip}
+        <ul>${w.criteria.map((c) => `<li><span class="${c.passed ? "ok" : "bad"}">${c.passed ? "✓" : "✕"}</span><span>${esc(c.description)} <span class="muted">· ${esc(CTYPE[c.type] ?? c.type)}</span></span></li>`).join("")}</ul>
+        <div class="meta">${r.payload.timeline.releasedAt ? `Paid ${esc(r.payload.timeline.releasedAt.slice(0, 10))}` : ""}${r.payload.timeline.onTime === true ? " · on time" : r.payload.timeline.onTime === false ? " · late" : ""}
+          · released ${esc({ automatic: "automatically after checks passed", client_approved: "with the client's approval", reviewer: "by a reviewer" }[r.payload.release] ?? r.payload.release)}
+          ${w.evidence.filter((x) => /^https?:/.test(x)).map((x) => ` · <a href="${esc(x)}" rel="noopener noreferrer nofollow" target="_blank">${esc(x.replace(/^https?:\/\//, ""))}</a>`).join("")}
+          ${!r.valid ? ` · ${esc(r.reason)}` : ""}</div>
+      </article>`;
+    }).join("")}`;
+
+  $("#who-go")?.addEventListener("click", async () => {
+    const v = $("#who").value;
+    if (!v) return;
+    const match = (await hashEmail(v)) === [...subjects][0];
+    $("#who-out").innerHTML = match ? `<span class="ok">✓ Yes — this record belongs to ${esc(v)}</span>` : `<span class="bad">✕ That email doesn't match this record</span>`;
+  });
+}
+
+$("#paste-go").addEventListener("click", () => {
+  const v = $("#paste-in").value.trim();
+  const m = v.match(/#([tb])=(.+)$/);
+  location.hash = m ? `${m[1]}=${m[2]}` : `t=${v}`;
+});
+window.addEventListener("hashchange", () => run(tokensFromHash()));
+run(tokensFromHash());
+</script>
+</body>
+</html>

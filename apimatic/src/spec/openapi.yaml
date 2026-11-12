@@ -1,0 +1,902 @@
+openapi: 3.0.3
+info:
+  title: ProofPay API
+  version: 1.2.0
+  description: |
+    ProofPay is pay-on-proof escrow built on PayPal. Clients fund milestones with a PayPal
+    authorization hold; freelancers submit proof (a merged GitHub PR, a live URL, or a document);
+    ProofPay verifies it with deterministic checks plus AI review, scores release risk with an ML
+    model, and either captures and pays out automatically or holds the money for a human.
+
+    **Authentication.** Creating an escrow returns one secret key per party (client, freelancer).
+    Send it as `Authorization: Bearer <key>`. A key works only for its own escrow and role. People can
+    mint extra *agent* keys for their AI agents; the server knows from the key that the caller is an
+    agent. Reviewers use the platform admin key.
+
+    **Money movement rules (enforced server-side):**
+    - Funding always needs a person to approve the PayPal hold (`approvalUrl`).
+    - Automatic release only when every criterion passes, verifier confidence ≥ 0.7 and risk < 0.35.
+    - Agent keys can never override a policy hold, refund, retry payouts or resolve disputes (`HUMAN_APPROVAL_REQUIRED`).
+    - Once work is submitted the client can't cancel; they request changes or dispute (`FREELANCER_PROTECTED`).
+    - PayPal holds last 29 days; milestones due later must be funded closer to the start (`FUND_LATER`).
+    - If the buyer later disputes a captured payment with PayPal, ProofPay answers with the verification record.
+    - Payout timing is risk-priced: low risk is paid instantly, higher risk waits (48 h / 7 days by default), and an
+      open PayPal dispute pauses it.
+
+    **Portable proof of delivery.** Every released milestone gets an Ed25519-signed attestation (compact JWS, alg
+    EdDSA). The public key is at `/.well-known/jwks.json`, so anyone can verify attestations without trusting
+    ProofPay. Freelancers export all of theirs as a track record they own.
+  contact:
+    name: ProofPay
+  license:
+    name: MIT
+    url: https://opensource.org/licenses/MIT
+security:
+  - escrowKey: []
+servers:
+  - url: http://localhost:8080
+    description: Local
+  - url: https://proofpay.onrender.com
+    description: Hosted demo (replace with your Render URL)
+tags:
+  - name: Plans
+    description: AI drafting of milestones from a scope of work
+  - name: Escrows
+    description: Create and read escrows and their audit ledger
+  - name: Milestones
+    description: Fund, prove, verify, release, refund, dispute
+  - name: Risk
+    description: ML release-risk model
+  - name: Proof
+    description: Signed, independently verifiable proof of delivery
+  - name: System
+    description: Health and configuration
+paths:
+  /api/health:
+    get:
+      tags: [System]
+      operationId: getHealth
+      security: []
+      summary: Service status and active integrations
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Health" }
+
+  /api/plans/draft:
+    post:
+      tags: [Plans]
+      operationId: draftPlan
+      security: []
+      summary: Draft milestones and acceptance criteria from a scope of work
+      description: Uses Claude (structured output) or a deterministic parser when no AI key is configured. Creates nothing.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DraftPlanRequest" }
+            example:
+              scopeText: "Milestone 1: Landing page - $300, due in 7 days. Live at a public URL."
+              currency: USD
+      responses:
+        "200":
+          description: Draft plan
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DraftPlan" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /api/escrows:
+    get:
+      tags: [Escrows]
+      operationId: listEscrows
+      summary: List all escrows (reviewer / admin key only)
+      responses:
+        "200":
+          description: Escrow summaries
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/EscrowSummary" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    post:
+      tags: [Escrows]
+      operationId: createEscrow
+      security: []
+      summary: Create an escrow from a reviewed plan
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateEscrowRequest" }
+      responses:
+        "201":
+          description: Created. The access keys are returned only here — store them.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CreatedEscrow" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /api/escrows/from-scope:
+    post:
+      tags: [Escrows]
+      operationId: createEscrowFromScope
+      security: []
+      summary: Draft a plan with AI and create the escrow in one call (agent-friendly)
+      description: "With header `x-created-by: agent`, the response contains an agent key instead of the client key; the person receives their client key when they approve the first PayPal hold."
+      parameters:
+        - { name: x-created-by, in: header, required: false, schema: { type: string, enum: [agent] } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateFromScopeRequest" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/CreatedEscrow"
+                  - type: object
+                    required: [plan]
+                    properties:
+                      plan: { $ref: "#/components/schemas/DraftPlan" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /api/escrows/{escrowId}/agent-keys:
+    post:
+      tags: [Escrows]
+      operationId: createAgentKey
+      summary: Create a key for your AI agent (acts as your role, with agent restrictions)
+      parameters:
+        - { name: escrowId, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                label: { type: string, maxLength: 80 }
+      responses:
+        "201":
+          description: Agent key (shown once)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [agentKey, role]
+                properties:
+                  agentKey: { type: string }
+                  role: { type: string, enum: [client, freelancer] }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/escrows/{escrowId}:
+    get:
+      tags: [Escrows]
+      operationId: getEscrow
+      summary: Get an escrow with milestones, evidence, verdicts and risk (any party's key)
+      parameters:
+        - { name: escrowId, in: path, required: true, schema: { type: string }, example: esc_4b36cbdbce394ee0 }
+      responses:
+        "200":
+          description: Escrow
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Escrow" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /api/events:
+    get:
+      tags: [Escrows]
+      operationId: listEvents
+      summary: Audit ledger of every money movement and decision
+      description: With `escrowId`, any key for that escrow works. Without it, the admin key is required.
+      parameters:
+        - { name: escrowId, in: query, required: false, schema: { type: string } }
+      responses:
+        "200":
+          description: Events, newest first
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/LedgerEvent" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/milestones/{milestoneId}/fund:
+    post:
+      tags: [Milestones]
+      operationId: fundMilestone
+      summary: Create a PayPal order (intent AUTHORIZE) and return the approval URL
+      description: The client must open `approvalUrl` and approve. On return (or the CHECKOUT.ORDER.APPROVED webhook) ProofPay places the authorization hold.
+      parameters: [{ $ref: "#/components/parameters/MilestoneId" }]
+      responses:
+        "200":
+          description: Order created
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [milestone, approvalUrl]
+                properties:
+                  milestone: { $ref: "#/components/schemas/Milestone" }
+                  approvalUrl: { type: string, format: uri }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "502": { $ref: "#/components/responses/PayPalError" }
+
+  /api/milestones/{milestoneId}/evidence:
+    post:
+      tags: [Milestones]
+      operationId: submitEvidence
+      summary: Submit proof of work; verification and the release decision run immediately
+      parameters: [{ $ref: "#/components/parameters/MilestoneId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SubmitEvidenceRequest" }
+            example:
+              items:
+                - { kind: github_pr, value: "https://github.com/acme/shop/pull/42" }
+                - { kind: url, value: "https://shop.example.com/checkout" }
+      responses:
+        "200":
+          description: Escrow after verification
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Escrow" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/milestones/{milestoneId}/verify:
+    post:
+      tags: [Milestones]
+      operationId: verifyMilestone
+      summary: Re-run verification on submitted evidence
+      parameters: [{ $ref: "#/components/parameters/MilestoneId" }]
+      responses:
+        "200":
+          description: Escrow after verification
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Escrow" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/milestones/{milestoneId}/release:
+    post:
+      tags: [Milestones]
+      operationId: releaseMilestone
+      summary: Capture the hold and pay out the freelancer (human approval for policy holds)
+      parameters: [{ $ref: "#/components/parameters/MilestoneId" }]
+      responses:
+        "200":
+          description: Released
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Escrow" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "502": { $ref: "#/components/responses/PayPalError" }
+
+  /api/milestones/{milestoneId}/request-changes:
+    post:
+      tags: [Milestones]
+      operationId: requestChanges
+      summary: Send work back to the freelancer; money stays held
+      parameters: [{ $ref: "#/components/parameters/MilestoneId" }]
+      requestBody: { $ref: "#/components/requestBodies/Reason" }
+      responses:
+        "200": { description: Updated, content: { application/json: { schema: { $ref: "#/components/schemas/Escrow" } } } }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/milestones/{milestoneId}/refund:
+    post:
+      tags: [Milestones]
+      operationId: refundMilestone
+      summary: Void the PayPal hold (client is never charged) or cancel an unfunded milestone
+      description: |
+        Escrow protects both sides. The client can cancel before funding, or after the deadline passes
+        with no delivery. Once work is submitted the client must request changes or dispute
+        (`403 FREELANCER_PROTECTED`). The freelancer can return the money at any time before release.
+        Reviewers refund disputed milestones. Agents can never refund.
+      parameters: [{ $ref: "#/components/parameters/MilestoneId" }]
+      requestBody: { $ref: "#/components/requestBodies/Reason" }
+      responses:
+        "200": { description: Refunded, content: { application/json: { schema: { $ref: "#/components/schemas/Escrow" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/milestones/{milestoneId}/retry-payout:
+    post:
+      tags: [Milestones]
+      operationId: retryPayout
+      summary: Send the freelancer's payout now (a scheduled, failed or dispute-paused payout)
+      parameters: [{ $ref: "#/components/parameters/MilestoneId" }]
+      responses:
+        "200": { description: Payout sent, content: { application/json: { schema: { $ref: "#/components/schemas/Escrow" } } } }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/milestones/{milestoneId}/dispute:
+    post:
+      tags: [Milestones]
+      operationId: openDispute
+      summary: Freeze the milestone and generate a neutral AI brief for a reviewer
+      parameters: [{ $ref: "#/components/parameters/MilestoneId" }]
+      requestBody: { $ref: "#/components/requestBodies/Reason" }
+      responses:
+        "200": { description: Disputed, content: { application/json: { schema: { $ref: "#/components/schemas/Escrow" } } } }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/milestones/{milestoneId}/resolve:
+    post:
+      tags: [Milestones]
+      operationId: resolveDispute
+      summary: Reviewer resolves a dispute by releasing or refunding
+      parameters: [{ $ref: "#/components/parameters/MilestoneId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [outcome]
+              properties:
+                outcome: { type: string, enum: [release, refund] }
+                note: { type: string }
+      responses:
+        "200": { description: Resolved, content: { application/json: { schema: { $ref: "#/components/schemas/Escrow" } } } }
+        "409": { $ref: "#/components/responses/Conflict" }
+
+  /api/milestones/{milestoneId}/risk:
+    get:
+      tags: [Risk]
+      operationId: getMilestoneRisk
+      summary: Current ML release-risk score with the top contributing factors
+      parameters: [{ $ref: "#/components/parameters/MilestoneId" }]
+      responses:
+        "200": { description: Risk, content: { application/json: { schema: { $ref: "#/components/schemas/RiskAssessment" } } } }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /.well-known/jwks.json:
+    get:
+      tags: [Proof]
+      operationId: getAttestationKeys
+      summary: Public keys for verifying delivery attestations (JWKS)
+      security: []
+      responses:
+        "200":
+          description: JWKS
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  keys:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        kty: { type: string, example: OKP }
+                        crv: { type: string, example: Ed25519 }
+                        x: { type: string }
+                        kid: { type: string }
+                        alg: { type: string, example: EdDSA }
+                        use: { type: string, example: sig }
+
+  /api/attestations/verify:
+    post:
+      tags: [Proof]
+      operationId: verifyAttestation
+      summary: Verify one attestation and get its live status
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token: { type: string }
+      responses:
+        "200":
+          description: Result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AttestationVerification" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /api/attestations/verify-bundle:
+    post:
+      tags: [Proof]
+      operationId: verifyAttestationBundle
+      summary: Verify a freelancer's whole track record
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [tokens]
+              properties:
+                tokens: { type: array, maxItems: 500, items: { type: string } }
+      responses:
+        "200":
+          description: One result per token
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/AttestationVerification" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+
+  /api/attestations/{milestoneId}/status:
+    get:
+      tags: [Proof]
+      operationId: getAttestationStatus
+      summary: Live status of an attestation (a PayPal dispute or refund after release)
+      security: []
+      parameters: [{ $ref: "#/components/parameters/MilestoneId" }]
+      responses:
+        "200":
+          description: Status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id: { type: string }
+                  status: { type: string, enum: [valid, disputed, revoked, unknown] }
+
+  /api/escrows/{escrowId}/track-record:
+    get:
+      tags: [Proof]
+      operationId: getTrackRecord
+      summary: Every attestation issued to this escrow's freelancer, as one bundle (freelancer key)
+      parameters:
+        - { name: escrowId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: Bundle
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  subject: { type: string, description: "sha256 of the salted email" }
+                  issuer: { type: string }
+                  count: { type: integer }
+                  tokens: { type: array, items: { type: string } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/desk:
+    get:
+      tags: [Risk]
+      operationId: getRiskDesk
+      summary: One row per milestone across all escrows, for reviewers (admin key)
+      responses:
+        "200":
+          description: Desk rows
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/admin/sweep:
+    post:
+      tags: [System]
+      operationId: sweepHolds
+      summary: Warn before PayPal holds expire and un-fund lapsed ones (admin key; used by the Render cron job)
+      responses:
+        "200":
+          description: Counts
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  expiring: { type: integer }
+                  expired: { type: integer }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/ml/export:
+    get:
+      tags: [Risk]
+      operationId: exportOutcomes
+      summary: Labelled real outcomes with the features logged at decision time (admin key)
+      responses:
+        "200":
+          description: CSV for ml/train.py --real
+          content:
+            text/csv:
+              schema: { type: string }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/ml/calibration:
+    get:
+      tags: [Risk]
+      operationId: getCalibration
+      summary: Predicted risk vs actual outcomes so far (admin key)
+      responses:
+        "200":
+          description: Calibration by risk band
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  outcomes: { type: integer }
+                  brierScore: { type: number, nullable: true }
+                  note: { type: string }
+                  bands:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        band: { type: string }
+                        count: { type: integer }
+                        predictedAvg: { type: number, nullable: true }
+                        actualRate: { type: number, nullable: true }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /api/ml/model:
+    get:
+      tags: [Risk]
+      operationId: getRiskModel
+      security: []
+      summary: Risk model version, features and evaluation metrics
+      responses:
+        "200":
+          description: Model info
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  version: { type: string }
+                  features: { type: object, additionalProperties: { type: string } }
+                  metrics: { type: object, additionalProperties: { type: number } }
+
+components:
+  parameters:
+    MilestoneId:
+      name: milestoneId
+      in: path
+      required: true
+      schema: { type: string }
+      example: ms_a42ffc3d34414c75
+
+  requestBodies:
+    Reason:
+      required: true
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [reason]
+            properties:
+              reason: { type: string, minLength: 3 }
+
+  securitySchemes:
+    escrowKey:
+      type: http
+      scheme: bearer
+      description: An escrow access key (client, freelancer or agent) or the reviewer admin key.
+
+  responses:
+    Unauthorized:
+      description: No access key sent
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    BadRequest:
+      description: Validation error
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    NotFound:
+      description: Not found
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Conflict:
+      description: Action not allowed in the milestone's current state
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Forbidden:
+      description: FORBIDDEN (wrong key or role), HUMAN_APPROVAL_REQUIRED or FREELANCER_PROTECTED
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    PayPalError:
+      description: PayPal returned an error
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+
+  schemas:
+    Error:
+      type: object
+      required: [error, message]
+      properties:
+        error: { type: string, example: HUMAN_APPROVAL_REQUIRED }
+        message: { type: string }
+        debugId: { type: string, nullable: true, description: PayPal debug id when relevant }
+
+    Health:
+      type: object
+      properties:
+        ok: { type: boolean }
+        paypal: { type: string, enum: [sandbox, demo] }
+        ai: { type: string, enum: [claude, heuristic] }
+        model: { type: string }
+        platformFeePct: { type: number }
+        policy:
+          type: object
+          properties:
+            autoReleaseMaxRisk: { type: number }
+            minVerifierConfidence: { type: number }
+
+    Party:
+      type: object
+      required: [name, email]
+      properties:
+        name: { type: string }
+        email: { type: string, format: email }
+
+    CriterionType:
+      type: string
+      enum: [github_pr_merged, github_checks_passed, url_live, url_contains, ai_judgment]
+
+    DraftCriterion:
+      type: object
+      required: [type, description]
+      properties:
+        type: { $ref: "#/components/schemas/CriterionType" }
+        description: { type: string }
+        params:
+          type: object
+          additionalProperties: { type: string }
+          description: "`text` for url_contains, optional `pathPrefix` for github_pr_merged"
+
+    Criterion:
+      allOf:
+        - $ref: "#/components/schemas/DraftCriterion"
+        - type: object
+          required: [id]
+          properties:
+            id: { type: string }
+
+    DraftMilestone:
+      type: object
+      required: [title, amount, criteria]
+      properties:
+        title: { type: string }
+        description: { type: string }
+        amount: { type: number, minimum: 0.01 }
+        dueInDays: { type: integer, nullable: true }
+        criteria:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/DraftCriterion" }
+
+    DraftPlanRequest:
+      type: object
+      required: [scopeText]
+      properties:
+        scopeText: { type: string, minLength: 20 }
+        currency: { type: string, minLength: 3, maxLength: 3, default: USD }
+
+    DraftPlan:
+      type: object
+      required: [title, currency, milestones, warnings, engine]
+      properties:
+        title: { type: string }
+        currency: { type: string }
+        milestones: { type: array, items: { $ref: "#/components/schemas/DraftMilestone" } }
+        warnings: { type: array, items: { type: string } }
+        engine: { type: string, enum: [claude, heuristic] }
+
+    CreateEscrowRequest:
+      type: object
+      required: [title, client, freelancer, milestones]
+      properties:
+        title: { type: string }
+        currency: { type: string, default: USD }
+        scopeText: { type: string }
+        client: { $ref: "#/components/schemas/Party" }
+        freelancer: { $ref: "#/components/schemas/Party" }
+        milestones: { type: array, minItems: 1, items: { $ref: "#/components/schemas/DraftMilestone" } }
+
+    CreateFromScopeRequest:
+      type: object
+      required: [scopeText, client, freelancer]
+      properties:
+        scopeText: { type: string, minLength: 20 }
+        currency: { type: string, default: USD }
+        client: { $ref: "#/components/schemas/Party" }
+        freelancer: { $ref: "#/components/schemas/Party" }
+
+    EvidenceItem:
+      type: object
+      required: [kind, value]
+      properties:
+        kind: { type: string, enum: [github_pr, url, text] }
+        value: { type: string, maxLength: 50000, description: "An http(s) URL for github_pr and url; free text for text" }
+        note: { type: string, maxLength: 2000 }
+
+    SubmitEvidenceRequest:
+      type: object
+      required: [items]
+      properties:
+        items: { type: array, minItems: 1, maxItems: 10, items: { $ref: "#/components/schemas/EvidenceItem" } }
+
+    Evidence:
+      allOf:
+        - $ref: "#/components/schemas/EvidenceItem"
+        - type: object
+          properties:
+            id: { type: string }
+            milestoneId: { type: string }
+            submittedAt: { type: string, format: date-time }
+
+    CriterionResult:
+      type: object
+      properties:
+        criterionId: { type: string }
+        passed: { type: boolean }
+        pending: { type: boolean, description: "Not finished yet (PR open, CI running); re-checked by the GitHub webhook" }
+        confidence: { type: number }
+        detail: { type: string }
+
+    Verdict:
+      type: object
+      properties:
+        passed: { type: boolean }
+        confidence: { type: number }
+        results: { type: array, items: { $ref: "#/components/schemas/CriterionResult" } }
+        summary: { type: string }
+        verifiedAt: { type: string, format: date-time }
+        engine: { type: string, enum: [claude, heuristic] }
+
+    RiskAssessment:
+      type: object
+      properties:
+        score: { type: number, description: Probability of dispute or non-delivery }
+        band: { type: string, enum: [low, medium, high] }
+        modelVersion: { type: string }
+        reasons:
+          type: array
+          items:
+            type: object
+            properties:
+              feature: { type: string }
+              label: { type: string }
+              impact: { type: number, description: "Contribution to the log-odds; positive raises risk" }
+
+    MilestoneStatus:
+      type: string
+      enum: [DRAFT, AWAITING_APPROVAL, FUNDED, SUBMITTED, NEEDS_REVIEW, CHANGES_REQUESTED, RELEASED, DISPUTED, REFUNDED]
+
+    Milestone:
+      type: object
+      properties:
+        id: { type: string }
+        escrowId: { type: string }
+        seq: { type: integer }
+        title: { type: string }
+        description: { type: string }
+        amount: { type: number }
+        dueDate: { type: string, format: date-time, nullable: true }
+        criteria: { type: array, items: { $ref: "#/components/schemas/Criterion" } }
+        status: { $ref: "#/components/schemas/MilestoneStatus" }
+        paypalOrderId: { type: string, nullable: true }
+        approvalUrl: { type: string, nullable: true }
+        authorizationId: { type: string, nullable: true }
+        authorizationExpiresAt: { type: string, nullable: true }
+        captureId: { type: string, nullable: true }
+        payoutBatchId: { type: string, nullable: true }
+        resubmissions: { type: integer }
+        fundedAt: { type: string, nullable: true }
+        submittedAt: { type: string, nullable: true }
+        releasedAt: { type: string, nullable: true }
+        lastVerdict: { type: object, allOf: [{ $ref: "#/components/schemas/Verdict" }], nullable: true }
+        risk: { type: object, allOf: [{ $ref: "#/components/schemas/RiskAssessment" }], nullable: true }
+        decision: { type: string, nullable: true }
+        payoutDueAt: { type: string, nullable: true, description: When the risk-priced payout goes out }
+        payoutPaused: { type: boolean, description: A PayPal dispute opened before the payout went out }
+        attestation: { type: string, nullable: true, description: Ed25519-signed proof of delivery (compact JWS) }
+        attestationStatus: { type: string, nullable: true, enum: [valid, disputed, revoked, unknown] }
+        paypalDisputeId: { type: string, nullable: true, description: A buyer dispute opened with PayPal after release }
+        paypalDisputeStatus: { type: string, nullable: true }
+        receiptUrl: { type: string, nullable: true, description: Signed public proof-of-delivery page (released milestones) }
+        holdExpiresSoon: { type: boolean, description: The PayPal hold expires within 3 days }
+        evidence: { type: array, items: { $ref: "#/components/schemas/Evidence" } }
+
+    AttestationVerification:
+      type: object
+      properties:
+        valid: { type: boolean }
+        reason: { type: string, description: Why verification failed }
+        kid: { type: string }
+        status: { type: string, enum: [valid, disputed, revoked, unknown] }
+        payload: { type: object, additionalProperties: true }
+
+    Totals:
+      type: object
+      properties:
+        total: { type: number }
+        held: { type: number }
+        released: { type: number }
+        refunded: { type: number }
+
+    Escrow:
+      type: object
+      properties:
+        id: { type: string }
+        title: { type: string }
+        clientName: { type: string }
+        clientEmail: { type: string }
+        freelancerName: { type: string }
+        freelancerEmail: { type: string }
+        currency: { type: string }
+        scopeText: { type: string }
+        status: { type: string, enum: [ACTIVE, COMPLETED, CANCELLED] }
+        createdBy: { type: string, enum: [web, agent, api] }
+        createdAt: { type: string, format: date-time }
+        totals: { $ref: "#/components/schemas/Totals" }
+        milestones: { type: array, items: { $ref: "#/components/schemas/Milestone" } }
+        you:
+          type: object
+          description: The caller, as resolved from the key
+          properties:
+            role: { type: string, enum: [client, freelancer, reviewer] }
+            viaAgent: { type: boolean }
+
+    CreatedEscrow:
+      type: object
+      required: [escrow, access]
+      properties:
+        escrow: { $ref: "#/components/schemas/Escrow" }
+        access:
+          type: object
+          description: Secret keys and share links. Returned once; only hashes are stored.
+          properties:
+            clientKey: { type: string }
+            clientLink: { type: string }
+            freelancerKey: { type: string }
+            freelancerLink: { type: string }
+            agentKey: { type: string, description: Present when created by an agent }
+            clientAccess: { type: string }
+
+    EscrowSummary:
+      type: object
+      properties:
+        id: { type: string }
+        title: { type: string }
+        clientName: { type: string }
+        freelancerName: { type: string }
+        currency: { type: string }
+        status: { type: string }
+        createdBy: { type: string }
+        createdAt: { type: string }
+        totals: { $ref: "#/components/schemas/Totals" }
+        milestoneCount: { type: integer }
+        needsReview: { type: integer }
+
+    LedgerEvent:
+      type: object
+      properties:
+        id: { type: integer }
+        ts: { type: string, format: date-time }
+        escrowId: { type: string }
+        milestoneId: { type: string, nullable: true }
+        type: { type: string, example: CAPTURED }
+        actor: { type: string }
+        amount: { type: number, nullable: true }
+        message: { type: string }
+        data: { type: object, nullable: true, additionalProperties: true }

@@ -1,0 +1,51 @@
+# Render Blueprint: Render Dashboard → New → Blueprint → pick this repo. Everything here is on the Free plan.
+#
+# Free web services sleep after 15 minutes without traffic, take about a minute to wake, and lose local
+# files (the SQLite database) when they sleep or restart. For a demo that judges visit later:
+#   - point a free uptime monitor (e.g. UptimeRobot, every 5 min) at https://<your-app>.onrender.com/api/health
+#     so it stays awake and keeps its data (one always-on service uses ~744 of the 750 free hours a month);
+#   - set ATTESTATION_PRIVATE_KEY so signed proofs stay verifiable even after a restart.
+# The web service runs the hold-expiry and scheduled-payout sweep itself every 5 minutes while awake.
+# On a paid plan you can instead call POST /api/admin/sweep from a Render Cron Job (cron jobs aren't free).
+envVarGroups:
+  - name: proofpay-shared
+    envVars:
+      - key: ADMIN_KEY
+        generateValue: true # reviewer key — copy it from the Render dashboard
+
+services:
+  - type: web
+    name: proofpay
+    runtime: node
+    plan: free
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - fromGroup: proofpay-shared
+      - key: NODE_VERSION
+        value: "22.13.0"
+      - key: DB_PATH
+        value: /tmp/proofpay.db # free instances have no persistent disk; see the disk note below
+      - key: PAYPAL_CLIENT_ID
+        sync: false
+      - key: PAYPAL_CLIENT_SECRET
+        sync: false
+      - key: PAYPAL_WEBHOOK_ID
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GITHUB_TOKEN # recommended: Render's shared IPs hit GitHub's 60/hour anonymous limit quickly
+        sync: false
+      - key: NOTIFY_WEBHOOK_URL # optional: Zapier Catch Hook URL for escrow events
+        sync: false
+      - key: GITHUB_WEBHOOK_SECRET # optional: merging a submitted PR releases payment
+        sync: false
+      - key: ATTESTATION_PRIVATE_KEY # run `npm run keygen` and paste; keeps proofs verifiable across redeploys
+        sync: false
+    # To keep data across deploys, switch to a paid plan and add:
+    # disk:
+    #   name: proofpay-data
+    #   mountPath: /var/data
+    #   sizeGB: 1
+    # and set DB_PATH=/var/data/proofpay.db

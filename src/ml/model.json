@@ -1,0 +1,78 @@
+{
+  "version": "risk-lr-1.0.0",
+  "trained_on": "synthetic-v1 (see ml/train.py)",
+  "features": [
+    "log_amount_usd",
+    "days_to_deadline",
+    "log_freelancer_completed",
+    "freelancer_dispute_rate",
+    "first_engagement",
+    "resubmissions",
+    "verifier_confidence",
+    "criteria_pass_ratio",
+    "log_hours_fund_to_submit",
+    "subjective_criteria_ratio",
+    "late_submission"
+  ],
+  "labels": {
+    "log_amount_usd": "Milestone size",
+    "days_to_deadline": "Time left before deadline",
+    "log_freelancer_completed": "Freelancer's completed milestones",
+    "freelancer_dispute_rate": "Freelancer's dispute rate",
+    "first_engagement": "First job between these parties",
+    "resubmissions": "Number of resubmissions",
+    "verifier_confidence": "Verifier confidence",
+    "criteria_pass_ratio": "Share of criteria passed",
+    "log_hours_fund_to_submit": "Time from funding to submission",
+    "subjective_criteria_ratio": "Share of subjective (AI-judged) criteria",
+    "late_submission": "Submitted after due date"
+  },
+  "mean": [
+    5.60767,
+    11.939739,
+    1.495981,
+    0.04534,
+    0.553033,
+    0.491533,
+    0.75267,
+    0.832543,
+    3.561969,
+    0.37755,
+    0.181
+  ],
+  "scale": [
+    0.99806,
+    8.507065,
+    0.91204,
+    0.088609,
+    0.49718,
+    0.699901,
+    0.134323,
+    0.13093,
+    1.220791,
+    0.367585,
+    0.385018
+  ],
+  "coef": [
+    0.317693,
+    -0.074259,
+    -0.41585,
+    0.356171,
+    0.374726,
+    0.268471,
+    -0.324719,
+    -0.396091,
+    -0.277068,
+    0.499331,
+    0.232603
+  ],
+  "intercept": -1.838632,
+  "metrics": {
+    "positive_rate": 0.1854,
+    "logreg_auc": 0.7847,
+    "logreg_brier": 0.1219,
+    "gbm_auc_baseline": 0.7804,
+    "n_train": 30000,
+    "n_test": 10000
+  }
+}

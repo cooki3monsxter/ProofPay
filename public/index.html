@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ProofPay</title>
+  <meta name="description" content="Escrow that pays freelancers the moment their work is verified. Built on PayPal." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2314213D'/%3E%3Cpath d='M9 17l5 5 9-12' stroke='%2335C08A' stroke-width='3.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#/">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" class="brand-tile"/><path d="M9 17l5 5 9-12" class="brand-tick"/></svg>
+      <span>ProofPay</span>
+    </a>
+    <div class="modes" id="modes" aria-live="polite"></div>
+    <div class="role" role="radiogroup" aria-label="View as">
+      <span class="role-label">View as</span>
+      <button role="radio" data-role="client" aria-checked="true">Client</button>
+      <button role="radio" data-role="freelancer" aria-checked="false">Freelancer</button>
+      <button role="radio" data-role="reviewer" aria-checked="false">Reviewer</button>
+    </div>
+  </header>
+
+  <div class="shell">
+    <aside class="sidebar">
+      <a class="btn btn-primary btn-block" href="#/new">New escrow</a>
+      <nav id="escrow-list" aria-label="Escrows"></nav>
+    </aside>
+    <main id="main" tabindex="-1"></main>
+  </div>
+
+  <dialog id="ask">
+    <form method="dialog">
+      <h2 id="ask-title"></h2>
+      <p id="ask-help"></p>
+      <textarea id="ask-text" rows="4" required minlength="3"></textarea>
+      <div class="row-end">
+        <button value="cancel" class="btn" formnovalidate>Cancel</button>
+        <button value="ok" class="btn btn-primary" id="ask-ok"></button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="toasts" aria-live="assertive"></div>
+
+  <script src="/vendor/ag-grid/ag-grid-community.min.js"></script>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

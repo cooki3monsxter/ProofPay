@@ -1,0 +1,42 @@
+{
+  "name": "proofpay",
+  "version": "1.0.0",
+  "description": "ProofPay — pay-on-proof escrow for humans and AI agents, built on PayPal + AI + ML",
+  "scripts": {
+    "dev": "tsx watch --env-file-if-exists=.env src/server.ts",
+    "start": "node --env-file-if-exists=.env --disable-warning=ExperimentalWarning dist/server.js",
+    "build": "tsc -p .",
+    "mcp": "node --disable-warning=ExperimentalWarning dist/mcp/stdio.js",
+    "mcp:dev": "tsx --env-file-if-exists=.env src/mcp/stdio.ts",
+    "test": "tsx --test tests/*.test.ts",
+    "train:model": "python3 ml/train.py",
+    "apimatic:validate": "apimatic api validate --input=./apimatic",
+    "apimatic:sdk:java": "apimatic sdk generate --input=./apimatic --language=java --destination=./sdks/java",
+    "apimatic:sdk:ts": "apimatic sdk generate --input=./apimatic --language=typescript --destination=./sdks/typescript",
+    "apimatic:sdk:python": "apimatic sdk generate --input=./apimatic --language=python --destination=./sdks/python",
+    "apimatic:portal": "apimatic portal generate --input=./apimatic",
+    "test:llm": "tsx --env-file-if-exists=.env --test tests/llm/llm.eval.ts",
+    "demo:agents": "tsx scripts/agent-to-agent.ts",
+    "postman": "python3 scripts/postman.py",
+    "keygen": "node scripts/keygen.mjs",
+    "test:ui": "python3 tests/ui/smoke.py"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@bryntum/gantt": "npm:@bryntum/gantt-trial@^7.3.8",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "ag-grid-community": "^36.3.0",
+    "express": "^5.3.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^26.6.6",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  },
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  }
+}
